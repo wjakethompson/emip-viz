@@ -1,0 +1,95 @@
+---
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+header-includes:
+  - \usepackage{setspace}\singlespacing
+  - \raggedright
+  - \pagenumbering{gobble}
+mainfont: Source Sans Pro
+bibliography:
+  - "bib/refs.bib"
+biblio-style: apa
+csl: bib/apa.csl
+---
+
+```{r setup, include = FALSE}
+needed_packages <- c("tidyverse", "here", "cmdstanr", "tidybayes", "ggridges",
+                     "wjake", "showtext")
+load_packages <- function(x) {
+  if (!(x %in% installed.packages())) {
+    install.packages(x, repos = "https://cran.rstudio.com/")
+  }
+  suppressPackageStartupMessages(require(x, character.only = TRUE))
+}
+vapply(needed_packages, load_packages, logical(1))
+
+font_add(family = "Source Sans", regular = "SourceSansPro-Regular.ttf",
+         italic = "SourceSansPro-Italic.ttf", bold = "SourceSansPro-Bold.ttf",
+         bolditalic = "SourceSansPro-BoldItalic.ttf")
+showtext_auto()
+showtext_opts(dpi = 320)
+
+options(knitr.table.format = "markdown")
+
+knitr::opts_chunk$set(include = FALSE)
+```
+
+```{r functions}
+
+```
+
+```{r simulate-data}
+set.seed(1213)
+
+
+```
+
+```{r fit-model}
+
+```
+
+```{r create-plot}
+
+```
+
+**Title:** Visualizing Distributions Over Time With Ridgeline Plots
+\break
+
+**Submitters:**
+
+W. Jake Thompson, Ph.D.  
+Accessible Teaching, Learning, and Assessment Systems (ATLAS); University of Kansas
+\break
+
+**Corresponding author:**
+
+W. Jake Thompson, Ph.D.  
+ATLAS, University of Kansas  
+1122 West Campus Road  
+Joseph R. Pearson Hall, Room 437  
+Lawrence, KS 66045  
+wjakethompson@gmail.com  
+
+\newpage
+
+**Title:** A Title
+\break
+
+**Caption:** A one sentence caption.
+\break
+
+```{r print-fig, include = TRUE, echo = FALSE, eval = FALSE}
+#| out.width = "100%"
+
+knitr::include_graphics(here("2023-uncertainty", "XXX.pdf"))
+```
+
+**Description:**
+
+These uncertainty distributions are straightforward to creating using the {ggplot2} and {ggdist} packages in R [@R-ggplot2; @R-ggdist].
+\break
+
+**References**
+
