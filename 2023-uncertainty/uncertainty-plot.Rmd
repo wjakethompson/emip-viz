@@ -15,7 +15,7 @@ csl: bib/apa.csl
 ---
 
 ```{r setup, include = FALSE}
-needed_packages <- c("tidyverse", "here", "cmdstanr", "tidybayes", "ggridges",
+needed_packages <- c("tidyverse", "here", "cmdstanr", "tidybayes", "ggdist",
                      "wjake", "showtext")
 load_packages <- function(x) {
   if (!(x %in% installed.packages())) {
@@ -54,7 +54,7 @@ set.seed(1213)
 
 ```
 
-**Title:** Visualizing Distributions Over Time With Ridgeline Plots
+**Title:** Different Methods for Visualizing Uncertainty
 \break
 
 **Submitters:**
@@ -74,7 +74,7 @@ wjakethompson@gmail.com
 
 \newpage
 
-**Title:** A Title
+**Title:** Different Methods for Visualizing Uncertainty
 \break
 
 **Caption:** A one sentence caption.
