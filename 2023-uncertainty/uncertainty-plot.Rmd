@@ -133,7 +133,7 @@ ggsave("uncertainty.png", plot = uncertainty, device = ragg::agg_png,
        bg = "white")
 ```
 
-**Title:** Different Methods for Visualizing Uncertainty
+**Title:** Communicating Uncertainty Through Visualization
 \break
 
 **Submitters:**
