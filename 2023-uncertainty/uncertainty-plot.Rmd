@@ -152,22 +152,28 @@ wjakethompson@gmail.com
 
 \newpage
 
-**Title:** Different Methods for Visualizing Uncertainty
+**Title:** Communicating Uncertainty Through Visualization
 \break
 
-**Caption:** A one sentence caption.
+**Caption:** Four different methods for visualizing uncertainty in parameter estimates.
 \break
 
 ```{r print-fig, include = TRUE, echo = FALSE}
 #| out.width = "100%"
 
-knitr::include_graphics(here("2023-uncertainty", "uncertainty.png"),
-                        auto_pdf = FALSE)
+knitr::include_graphics(here("2023-uncertainty", "uncertainty.png"))
 ```
 
 **Description:**
 
+Accurately and effectively communicating uncertainty is a critical aspect scientific research [@padilla-2021].
+
 These uncertainty distributions are straightforward to create using the {ggplot2} and {ggdist} packages in R [@R-ggplot2; @R-ggdist].
+
+Half-eye plots...
+Dot plots...
+Interval plots...
+Gradient plots...
 \break
 
 **References**
