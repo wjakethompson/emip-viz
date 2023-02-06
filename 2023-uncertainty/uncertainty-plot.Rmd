@@ -166,14 +166,20 @@ knitr::include_graphics(here("2023-uncertainty", "uncertainty.png"))
 
 **Description:**
 
-Accurately and effectively communicating uncertainty is a critical aspect scientific research [@padilla-2021].
-
+Accurately and effectively communicating uncertainty is a critical aspect scientific research.
+Often, results of scientific studies are reported as an average effect or model parameter with an associated standard error or confidence interval.
+However, this type of reporting often obscures important aspects of the data, and confidence intervals written in text are easy to skim over.
+Communicating uncertainty through visualization allows consumers of scientific research to see a more complete picture of the data or model, and can lead to more effective decision making [@padilla-2023].
+This graphic uses simulated data to illustrate four different methods for visualizing the uncertainty in group-level effects and the difference between the effects.
 These uncertainty distributions are straightforward to create using the {ggplot2} and {ggdist} packages in R [@R-ggplot2; @R-ggdist].
 
-Half-eye plots...
-Dot plots...
-Interval plots...
-Gradient plots...
+Half-eye plots use density plots with interval lines to visualize the complete distribution of plausible parameter values, while the interval lines allow readers to more easily summarize the high density areas.
+Dot plots (also called quantile dot plots) are similar to density plots, but summarize the distribution into a given number of dots or quantiles (100 in this graphic).
+This method of representing distributions as frequency counts has been shown to be easier for laypeople to understand [@kay-2016].
+Interval plots summarizes ranges of plausible values (e.g., 67%, 89%, and 97% in this graphic).
+The wider intervals (i.e., more uncertainty) are shaded with a lighter color, where as the narrower intervals are darker.
+Finally, gradient plots are similar to interval plots, but rather than having sharp boundaries at arbitrary thresholds, the gradient plot is continuous.
+Transparency is used to "fade out" the low density regions, whereas the high density regions are opaque.
 \break
 
 **References**
