@@ -15,8 +15,8 @@ csl: bib/apa.csl
 ---
 
 ```{r setup, include = FALSE}
-needed_packages <- c("tidyverse", "here", "cmdstanr", "tidybayes", "ggdist",
-                     "wjake", "showtext")
+needed_packages <- c("tidyverse", "here", "brms", "cmdstanr", "tidybayes",
+                     "ggdist", "wjake", "showtext", "patchwork")
 load_packages <- function(x) {
   if (!(x %in% installed.packages())) {
     install.packages(x, repos = "https://cran.rstudio.com/")
@@ -36,22 +36,100 @@ options(knitr.table.format = "markdown")
 knitr::opts_chunk$set(include = FALSE)
 ```
 
-```{r functions}
-
-```
-
-```{r simulate-data}
+```{r simulate-data, cache = TRUE, include = FALSE}
 set.seed(1213)
 
+n <- 100
 
+sim_dat <- tibble(resp = 1:n) |> 
+  mutate(baseline = rnorm(n(), mean = 0, sd = 1),
+         group = rep(c("control", "treatment"), each = n() / 2),
+         effect = rnorm(n(), mean = rep(c(0.2, 1.3), each = n() / 2),
+                        sd = rep(c(1.0, 0.3), each = n() / 2)),
+         final = rnorm(n(), mean = baseline + effect, sd = 1),
+         change = final - baseline)
 ```
 
-```{r fit-model}
-
+```{r fit-model, cache = TRUE, dependson = "simulate-data", include = FALSE}
+model <- brm(change ~ 0 + group, data = sim_dat, family = gaussian,
+             prior = c(prior(normal(0, 0.5), class = b),
+                       prior(exponential(1), class = sigma)),
+             iter = 4000, warmup = 2000, chains = 4, cores = 4, seed = 13,
+             backend = "cmdstanr")
 ```
 
 ```{r create-plot}
+draws <- as_draws_df(model) |> 
+  mutate(diff = b_grouptreatment - b_groupcontrol) |> 
+  as_tibble() |> 
+  select(.draw, control = b_groupcontrol, 
+         treatment = b_grouptreatment, diff) |> 
+  pivot_longer(cols = -.draw, names_to = "param", values_to = "value") |> 
+  mutate(param = factor(param, levels = c("diff", "treatment", "control"),
+                        labels = c("Difference", "Treatment", "Control")),
+         type = case_match(param,
+                           c("Treatment", "Control") ~ "Parameter",
+                           "Difference" ~ "Contrast"),
+         type = factor(type, levels = c("Parameter", "Contrast")))
 
+
+dots <- ggplot(draws, aes(x = value, y = param, fill = type)) +
+  stat_dots(quantiles = 100, layout = "weave", color = NA) +
+  labs(x = "Value", y = NULL, fill = NULL, title = "Dots") +
+  theme_minimal(base_family = "Source Sans Pro") +
+  theme(axis.text = element_text(color = "black"),
+        axis.text.y = element_text(vjust = 0),
+        axis.title.x = element_text(margin = margin(10, 0, 0, 0)),
+        legend.position = "bottom",
+        legend.margin = margin(0, 0, 0, 0))
+
+intervals <- ggplot(draws, aes(x = value, y = param)) +
+  stat_interval(aes(color = type, color_ramp = after_stat(level)),
+                .width = c(0.67, 0.89, 0.97), linewidth = 10,
+                show.legend = FALSE) +
+  labs(x = "Value", y = NULL, color = NULL, title = "Interval") +
+  theme_minimal(base_family = "Source Sans Pro") +
+  theme(axis.text = element_text(color = "black"),
+        axis.text.y = element_text(vjust = 0),
+        axis.title.x = element_text(margin = margin(10, 0, 0, 0)),
+        legend.position = "bottom",
+        legend.margin = margin(0, 0, 0, 0))
+
+gradient <- ggplot(draws, aes(x = value, y = param)) +
+  stat_gradientinterval(aes(fill = type), fill_type = "gradient",
+                        color = NA, height = 0.5, show.legend = FALSE) +
+  labs(x = "Value", y = NULL, color = NULL, title = "Gradient") +
+  theme_minimal(base_family = "Source Sans Pro") +
+  theme(axis.text = element_text(color = "black"),
+        axis.text.y = element_text(vjust = 0),
+        axis.title.x = element_text(margin = margin(10, 0, 0, 0)),
+        legend.position = "bottom",
+        legend.margin = margin(0, 0, 0, 0))
+
+halfeye <- ggplot(draws, aes(x = value, y = param)) +
+  stat_halfeye(aes(fill = type), show.legend = FALSE,
+               .width = c(0.67, 0.89, 0.97),
+               interval_size_range = c(1, 2), fatten_point = 1) +
+  labs(x = "Value", y = NULL, color = NULL, title = "Half-eye") +
+  theme_minimal(base_family = "Source Sans Pro") +
+  theme(axis.text = element_text(color = "black"),
+        axis.text.y = element_text(vjust = 0),
+        axis.title.x = element_text(margin = margin(10, 0, 0, 0)),
+        legend.position = "bottom",
+        legend.margin = margin(0, 0, 0, 0))
+
+(halfeye | dots) / (intervals | gradient) +
+  plot_layout(guides = "collect") &
+  expand_limits(x = c(-0.5, 2.0)) &
+  scale_fill_manual(values = c(Contrast = "#E69F00", Parameter = "#0072B2")) &
+  scale_color_manual(values = c(Contrast = "#E69F00", Parameter = "#0072B2")) &
+  theme(legend.position = "bottom",
+        plot.title.position = "plot") -> uncertainty
+
+ggsave("uncertainty.png", plot = uncertainty, device = ragg::agg_png,
+       path = here("2023-uncertainty"),
+       width = 8, height = 8, units = "in", dpi = 320,
+       bg = "white")
 ```
 
 **Title:** Different Methods for Visualizing Uncertainty
@@ -80,15 +158,16 @@ wjakethompson@gmail.com
 **Caption:** A one sentence caption.
 \break
 
-```{r print-fig, include = TRUE, echo = FALSE, eval = FALSE}
+```{r print-fig, include = TRUE, echo = FALSE}
 #| out.width = "100%"
 
-knitr::include_graphics(here("2023-uncertainty", "XXX.pdf"))
+knitr::include_graphics(here("2023-uncertainty", "uncertainty.png"),
+                        auto_pdf = FALSE)
 ```
 
 **Description:**
 
-These uncertainty distributions are straightforward to creating using the {ggplot2} and {ggdist} packages in R [@R-ggplot2; @R-ggdist].
+These uncertainty distributions are straightforward to create using the {ggplot2} and {ggdist} packages in R [@R-ggplot2; @R-ggdist].
 \break
 
 **References**
