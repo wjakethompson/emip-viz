@@ -1,0 +1,376 @@
+---
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+header-includes:
+  - \usepackage{setspace}\singlespacing
+  - \raggedright
+  - \pagenumbering{gobble}
+mainfont: Source Sans Pro
+bibliography:
+  - bib/refs.bib
+biblio-style: apa
+csl: bib/apa.csl
+---
+
+```{r setup, include = FALSE}
+needed_packages <- c("tidyverse", "here", "cmdstanr", "tidybayes", "ggridges",
+                     "wjake", "showtext")
+load_packages <- function(x) {
+  if (!(x %in% installed.packages())) {
+    install.packages(x, repos = "https://cran.rstudio.com/")
+  }
+  suppressPackageStartupMessages(require(x, character.only = TRUE))
+}
+vapply(needed_packages, load_packages, logical(1))
+
+font_add(family = "Source Sans", regular = "SourceSansPro-Regular.ttf",
+         italic = "SourceSansPro-Italic.ttf", bold = "SourceSansPro-Bold.ttf",
+         bolditalic = "SourceSansPro-BoldItalic.ttf")
+showtext_auto()
+showtext_opts(dpi = 320)
+
+options(knitr.table.format = "markdown")
+
+knitr::opts_chunk$set(include = FALSE)
+```
+
+```{r functions}
+logit <- function(x) {
+  log(x / (1 - x))
+}
+inv_logit <- function(x) {
+  1 / (1 + exp(-x))
+}
+rounder <- function(x, to) {
+  if (to >= 0) {
+    x + (to - x %% to)
+  } else {
+    x - (x %% abs(to))
+  }
+}
+fit_stan <- function(dat) {
+  stu_lookup <- distinct(dat, student_id) |> 
+    rowid_to_column(var = "stan_stu")
+  itm_lookup <- distinct(dat, item_id) |> 
+    rowid_to_column(var = "stan_itm")
+  
+  stan_dat <- dat |> 
+    left_join(stu_lookup, by = "student_id") |> 
+    left_join(itm_lookup, by = "item_id") |> 
+    select(stan_stu, stan_itm, score)
+  
+  stan_data <- list(
+    I = nrow(itm_lookup),
+    J = nrow(stu_lookup),
+    N = nrow(stan_dat),
+    ii = stan_dat$stan_itm,
+    jj = stan_dat$stan_stu,
+    y = stan_dat$score
+  )
+  
+  mod <- cmdstan_model(here("2023-ridgeline", "stan", "2pl.stan"))
+  fit <- mod$sample(data = stan_data, seed = 13, chains = 4, parallel_chains = 4,
+                    iter_warmup = 2000, iter_sampling = 2000, adapt_delta = 0.99,
+                    max_treedepth = 15)
+  
+  mod_sum <- fit$summary()
+  
+  stu_par <- mod_sum |> 
+    filter(str_detect(variable, "theta")) |> 
+    select(variable, mean) |> 
+    separate(variable, c(NA, "stan_stu", NA), sep = "\\[|\\]",
+             convert = TRUE) |> 
+    left_join(stu_lookup, by = "stan_stu") |> 
+    select(student_id, est_theta = mean)
+  
+  itm_par <- mod_sum |> 
+    filter(str_detect(variable, "alpha|beta")) |> 
+    select(variable, mean) |> 
+    separate(variable, c("param", "stan_itm", NA), sep = "\\[|\\]",
+             convert = TRUE) |> 
+    pivot_wider(names_from = param, values_from = mean) |> 
+    left_join(itm_lookup, by = "stan_itm") |> 
+    select(item_id, est_a = alpha, est_b = beta)
+  
+  ret <- tibble(person_params = list(stu_par),
+                item_params = list(itm_par))
+  return(ret)
+}
+```
+
+```{r simulate-data, cache = TRUE}
+set.seed(1213)
+
+grades <- c(3:8, 10)
+items <- list_along(grades)
+
+items_per_grade <- 55:60
+anchor_set <- 15
+
+stu_per_grade <- 1000:1500
+
+## simulate items -----
+all_items <- tibble(item_id = sample(10000:99999,
+                                     size = max(items_per_grade) *
+                                       length(grades) * 2)) |> 
+  mutate(a = runif(n(), min = 0.2, max = 3),
+         b = rnorm(n(), mean = 0, sd = 0.8))
+
+adjust <- c(0, -0.05, -0.1, -0.15, rep(-0.3, length(grades) - 4))
+
+for (i in seq_along(items)) {
+  if (i == 1) {
+    items[[i]] <- slice_sample(all_items, n = sample(items_per_grade, 1)) |> 
+      mutate(grade = grades[i], .before = 1)
+  } else {
+    tmp_items <- bind_rows(items)
+    
+    items[[i]] <- all_items |> 
+      anti_join(tmp_items, by = "item_id") |> 
+      slice_sample(n = sample(items_per_grade, 1) - anchor_set) |> 
+      bind_rows(items[[i - 1]] |> 
+                  slice_max(b, n = anchor_set) |> 
+                  select(-grade) |> 
+                  mutate(a = runif(n(), min = 0.2, max = 3),
+                         b = rnorm(n(), mean = adjust[i], sd = 0.4))) |> 
+      mutate(grade = grades[i], .before = 1)
+    
+    rm(tmp_items)
+  }
+}
+
+items <- bind_rows(items)
+
+## simulate people -----
+students <- tibble(grade = grades,
+                   sample_size = sample(stu_per_grade, size = length(grades))) |> 
+  uncount(sample_size) |> 
+  mutate(student_id = sample(100000:999999, size = n()),
+         theta = rnorm(n(), mean = 0, sd = 1))
+
+## simulate responses -----
+responses <- students |> 
+  left_join(items, by = "grade", multiple = "all") |> 
+  mutate(prob = map_dbl(a * (theta - b), inv_logit),
+         rand = runif(n(), 0, 1),
+         score = case_when(rand < prob ~ 1L, TRUE ~ 0L)) |> 
+  select(grade, student_id, item_id, score)
+```
+
+```{r fit-fake, eval = FALSE}
+fitted_params <- full_join(
+  students |> 
+    select(grade, student_id, est_theta = theta) |> 
+    nest(person_params = -grade),
+  items |> 
+    select(grade, item_id, est_a = a, est_b = b) |> 
+    nest(item_params = -grade),
+  by = "grade"
+)
+```
+
+```{r fit-stan, cache = TRUE, dependson = "simulate-data"}
+fitted_params <- responses |>
+  nest(data = -grade) |>
+  mutate(res = map(data, fit_stan)) |>
+  select(-data) |>
+  unnest(res) |>
+  write_rds(here("2023-ridgeline", "rds", "fitted_params.rds"))
+```
+
+```{r linking}
+# using mean-sigma linking
+fitted_params$new_person_params <- list(tibble())
+fitted_params$new_item_params <- list(tibble())
+
+fitted_params$new_person_params[[4]] <- fitted_params$person_params[[4]]
+fitted_params$new_item_params[[4]] <- fitted_params$item_params[[4]]
+
+for (i in 5:nrow(fitted_params)) {
+  old_items <- fitted_params$new_item_params[[i - 1]] |> 
+    rename(old_a = est_a, old_b = est_b)
+  cur_items <- fitted_params$item_params[[i]] |> 
+    rename(cur_a = est_a, cur_b = est_b)
+  
+  linking_par <- inner_join(old_items, cur_items, by = "item_id") |> 
+    summarize(slope = sd(old_b) / sd(cur_b),
+              inter = mean(old_b) - (slope * mean(cur_b))) |> 
+    pivot_longer(everything()) |> 
+    deframe()
+  
+  fitted_params$new_item_params[[i]] <- cur_items |> 
+    mutate(new_b = cur_b * linking_par["slope"] + linking_par["inter"],
+           new_a = cur_a / linking_par["slope"]) |> 
+    select(item_id, est_a = new_a, est_b = new_b)
+  
+  fitted_params$new_person_params[[i]] <- fitted_params$person_params[[i]] |> 
+    mutate(new_theta = est_theta * linking_par["slope"] + linking_par["inter"]) |> 
+    select(student_id, est_theta = new_theta)
+}
+
+for (i in 3:1) {
+  old_items <- fitted_params$new_item_params[[i + 1]] |> 
+    rename(old_a = est_a, old_b = est_b)
+  cur_items <- fitted_params$item_params[[i]] |> 
+    rename(cur_a = est_a, cur_b = est_b)
+  
+  linking_par <- inner_join(old_items, cur_items, by = "item_id") |> 
+    summarize(slope = sd(old_b) / sd(cur_b),
+              inter = mean(old_b) - (slope * mean(cur_b))) |> 
+    pivot_longer(everything()) |> 
+    deframe()
+  
+  fitted_params$new_item_params[[i]] <- cur_items |> 
+    mutate(new_b = cur_b * linking_par["slope"] + linking_par["inter"],
+           new_a = cur_a / linking_par["slope"]) |> 
+    select(item_id, est_a = new_a, est_b = new_b)
+  
+  fitted_params$new_person_params[[i]] <- fitted_params$person_params[[i]] |> 
+    mutate(new_theta = est_theta * linking_par["slope"] + linking_par["inter"]) |> 
+    select(student_id, est_theta = new_theta)
+}
+```
+
+```{r create-plot}
+pal <- ramp_blue(seq(1.0, 0.3, length.out = 3))
+
+# create scale scores -----
+scale_scores <- fitted_params |> 
+  select(grade, new_person_params) |> 
+  unnest(new_person_params) |> 
+  mutate(scale_score = (est_theta * 20) + 500)
+
+# calculate intervals -----
+theta_intervals <- scale_scores |> 
+  group_by(grade) |> 
+  reframe(mean_qi(scale_score, .width = c(0.67, 0.89, 0.97)),
+            .groups = "drop") |> 
+  select(grade, ymin, ymax, .width)
+
+# create plot data -----
+plot_data <- scale_scores |> 
+  group_by(grade) |> 
+  group_modify(~ ggplot2:::compute_density(.x$scale_score, NULL)) |> 
+  ungroup() |> 
+  rowid_to_column() |> 
+  left_join(theta_intervals,
+            join_by(grade, between(x, ymin, ymax))) |> 
+  slice_min(.width, n = 1, by = rowid) |> 
+  select(-rowid) |> 
+  complete(grade, x, fill = list(density = NA_real_))
+
+cart_limits <- plot_data |> 
+  summarize(min = rounder(min(x), -10),
+            max = rounder(max(x), 10)) |> 
+  pivot_longer(everything(), names_to = "type",
+               values_to = "value") |> 
+  deframe()
+
+line_extend <- crossing(grade = unique(scale_scores$grade),
+         min = cart_limits["min"],
+         max = cart_limits["max"]) |> 
+  mutate(density = 0) |> 
+  pivot_longer(cols = -c(grade, density),
+               names_to = "type", values_to = "x") |> 
+  select(-type)
+
+# create plot -----
+plot_data |> 
+  bind_rows(line_extend) |> 
+  arrange(grade, x) |> 
+  group_by(grade) |> 
+  mutate(present_density = !is.na(density),
+         present_sum = cumsum(present_density),
+         density = case_when(present_sum == 0 ~ 0,
+                             present_sum == max(present_sum) ~ 0,
+                             TRUE ~ density)) |> 
+  ungroup() |> 
+  filter(!is.na(density)) |> 
+  mutate(grade = factor(grade, levels = c(3:8, 10),
+                        labels = paste0("Grade ", c(3:8, 10)))) |> 
+  ggplot(aes(x = x, y = fct_rev(grade), height = density, group = grade)) +
+  geom_density_ridges_gradient(aes(fill = factor(.width)), stat = "identity",
+                               scale = 2.5) +
+  scale_fill_manual(values = pal, na.value = "transparent",
+                    breaks = c(0.67, 0.89, 0.97), labels = c("67%", "89%", "97%"),
+                    name = "Central Intervals") +
+  scale_x_continuous(expand = c(0, 1),
+                     breaks = seq(0, 1000, by = 20)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  # expand_limits(x = c(350, 650)) +
+  coord_cartesian(clip = "off", xlim = cart_limits) +
+  labs(x = "Scale Score", y = "Students") +
+  theme_minimal(base_family = "Source Sans Pro") +
+  theme(axis.text = element_text(color = "black"),
+        axis.text.y = element_text(vjust = 0),
+        axis.title.x = element_text(margin = margin(10, 0, 0, 0)),
+        legend.position = "bottom",
+        legend.margin = margin(0, 0, 0, 0)) -> ridgeline
+
+ggsave("ridgeline.pdf", plot = ridgeline,
+       path = here("2023-ridgeline"),
+       width = 8, height = 7, units = "in", dpi = 320,
+       bg = "white")
+
+ggsave("ridgeline.png", plot = ridgeline, device = ragg::agg_png,
+       path = here("2023-ridgeline"),
+       width = 8, height = 7, units = "in", dpi = 320,
+       bg = "white")
+```
+
+**Title:** Visualizing Distributions Over Time With Ridgeline Plots
+\break
+
+**Submitters:**
+
+W. Jake Thompson, Ph.D.  
+Accessible Teaching, Learning, and Assessment Systems (ATLAS); University of Kansas
+\break
+
+**Corresponding author:**
+
+W. Jake Thompson, Ph.D.  
+ATLAS, University of Kansas  
+1122 West Campus Road  
+Joseph R. Pearson Hall, Room 437  
+Lawrence, KS 66045  
+wjakethompson@gmail.com  
+
+\newpage
+
+**Title:** Visualizing Distributions Over Time With Ridgeline Plots
+\break
+
+**Caption:** An example ridgeline plot showing the distribution of scale scores across grade levels for a simulated vertically scaled assessment.
+\break
+
+```{r print-fig, include = TRUE, echo = FALSE}
+#| out.width = "100%"
+
+knitr::include_graphics(here("2023-ridgeline", "ridgeline.pdf"))
+```
+
+**Description:**
+
+Ridgeline plots are a type of line plots, where the lines for each group partially overlap.
+The partial overlap creates a visually attractive graphic that allows users to easily compare distributions from different groups cross sectionally or from a single group over time.
+This type of visualization makes it straightforward to quickly see changes in centrality and variability across groups and/or time points.
+Ridgeline plots can be easily created in R using the {ggplot2} and {ggridges} packages (Wickham et al., 2022; Wilke, 2022).
+
+This example of a ridgeline plot shows a simulation of an assessment that uses a vertical scale.
+For the distribution of scale scores for each grade level is plotted along the x-axis, and each grade level is partially overlapped on the y-axis.
+Using this visualization, we can quickly discern how scale scores increase across grades levels.
+There are small increases between lower grades, with slightly larger increases between the higher grades.
+Additionally, we can see that there is much more variability in the distributions for higher grades.
+In particular, grade 4, and to a lesser extent grade 3, have much more peaked distributions than other grades.
+The distributions for each grade have also been shaded to show the central intervals so that we can also compare, for example, the middle 67% of each distribution.
+Thus, this type of graphic is able to both communicate rich information and maintain a visually attractive appeal.
+\break
+
+**References**
+
+\hangindent=0.5in Wickham, H., Chang, W., Henry, L., Pedersen, T. L., Takahashi, K., Wilke, C., Woo, K., Yutani, H., & Dunnington, D. (2022). *ggplot2: Create elegant data visualisations using the grammar of graphics*. R package version 3.4.0. https://ggplot2.tidyverse.org
+
+\hangindent=0.5in Wilke, C. O. (2022). *ggridges: Ridgeline plots in ggplot2*. R package version 0.5.4. https://wilkelab.org/ggridges/
