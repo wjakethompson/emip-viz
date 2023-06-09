@@ -1,0 +1,194 @@
+---
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+header-includes:
+  - \usepackage{setspace}\singlespacing
+  - \raggedright
+  - \pagenumbering{gobble}
+mainfont: Source Sans Pro
+bibliography:
+  - "bib/refs.bib"
+biblio-style: apa
+csl: bib/apa.csl
+link-citations: yes
+---
+
+```{r setup, include = FALSE}
+needed_packages <- c("tidyverse", "here", "brms", "cmdstanr", "tidybayes",
+                     "ggdist", "wjake", "showtext", "patchwork")
+load_packages <- function(x) {
+  if (!(x %in% installed.packages())) {
+    install.packages(x, repos = "https://cran.rstudio.com/")
+  }
+  suppressPackageStartupMessages(require(x, character.only = TRUE))
+}
+vapply(needed_packages, load_packages, logical(1))
+
+font_add(family = "Source Sans", regular = "SourceSansPro-Regular.ttf",
+         italic = "SourceSansPro-Italic.ttf", bold = "SourceSansPro-Bold.ttf",
+         bolditalic = "SourceSansPro-BoldItalic.ttf")
+showtext_auto()
+showtext_opts(dpi = 320)
+
+options(knitr.table.format = "markdown")
+
+knitr::opts_chunk$set(include = FALSE)
+```
+
+```{r simulate-data, cache = TRUE, include = FALSE}
+set.seed(1213)
+
+n <- 100
+
+sim_dat <- tibble(resp = 1:n) |> 
+  mutate(baseline = rnorm(n(), mean = 0, sd = 1),
+         group = rep(c("control", "treatment"), each = n() / 2),
+         effect = rnorm(n(), mean = rep(c(0.2, 1.3), each = n() / 2),
+                        sd = rep(c(1.0, 0.3), each = n() / 2)),
+         final = rnorm(n(), mean = baseline + effect, sd = 1),
+         change = final - baseline)
+```
+
+```{r fit-model, cache = TRUE, dependson = "simulate-data", include = FALSE}
+model <- brm(change ~ 0 + group, data = sim_dat, family = gaussian,
+             prior = c(prior(normal(0, 0.5), class = b),
+                       prior(exponential(1), class = sigma)),
+             iter = 4000, warmup = 2000, chains = 4, cores = 4, seed = 13,
+             backend = "cmdstanr")
+```
+
+```{r create-plot}
+draws <- as_draws_df(model) |> 
+  mutate(diff = b_grouptreatment - b_groupcontrol) |> 
+  as_tibble() |> 
+  select(.draw, control = b_groupcontrol, 
+         treatment = b_grouptreatment, diff) |> 
+  pivot_longer(cols = -.draw, names_to = "param", values_to = "value") |> 
+  mutate(param = factor(param, levels = c("diff", "treatment", "control"),
+                        labels = c("Difference", "Treatment", "Control")),
+         type = case_match(param,
+                           c("Treatment", "Control") ~ "Parameter",
+                           "Difference" ~ "Contrast"),
+         type = factor(type, levels = c("Parameter", "Contrast")))
+
+
+dots <- ggplot(draws, aes(x = value, y = param, fill = type)) +
+  stat_dots(quantiles = 100, layout = "weave", color = NA) +
+  labs(x = "Value", y = NULL, fill = NULL, title = "Dots") +
+  theme_minimal(base_family = "Source Sans Pro") +
+  theme(axis.text = element_text(color = "black"),
+        axis.text.y = element_text(vjust = 0),
+        axis.title.x = element_text(margin = margin(10, 0, 0, 0)),
+        legend.position = "bottom",
+        legend.margin = margin(0, 0, 0, 0))
+
+intervals <- ggplot(draws, aes(x = value, y = param)) +
+  stat_interval(aes(color = type, color_ramp = after_stat(level)),
+                .width = c(0.67, 0.89, 0.97), linewidth = 10,
+                show.legend = FALSE) +
+  labs(x = "Value", y = NULL, color = NULL, title = "Interval") +
+  theme_minimal(base_family = "Source Sans Pro") +
+  theme(axis.text = element_text(color = "black"),
+        axis.text.y = element_text(vjust = 0),
+        axis.title.x = element_text(margin = margin(10, 0, 0, 0)),
+        legend.position = "bottom",
+        legend.margin = margin(0, 0, 0, 0))
+
+gradient <- ggplot(draws, aes(x = value, y = param)) +
+  stat_gradientinterval(aes(fill = type), fill_type = "gradient",
+                        color = NA, height = 0.5, show.legend = FALSE) +
+  labs(x = "Value", y = NULL, color = NULL, title = "Gradient") +
+  theme_minimal(base_family = "Source Sans Pro") +
+  theme(axis.text = element_text(color = "black"),
+        axis.text.y = element_text(vjust = 0),
+        axis.title.x = element_text(margin = margin(10, 0, 0, 0)),
+        legend.position = "bottom",
+        legend.margin = margin(0, 0, 0, 0))
+
+halfeye <- ggplot(draws, aes(x = value, y = param)) +
+  stat_halfeye(aes(fill = type), show.legend = FALSE,
+               .width = c(0.67, 0.89, 0.97),
+               interval_size_range = c(1, 2), fatten_point = 1) +
+  labs(x = "Value", y = NULL, color = NULL, title = "Half-eye") +
+  theme_minimal(base_family = "Source Sans Pro") +
+  theme(axis.text = element_text(color = "black"),
+        axis.text.y = element_text(vjust = 0),
+        axis.title.x = element_text(margin = margin(10, 0, 0, 0)),
+        legend.position = "bottom",
+        legend.margin = margin(0, 0, 0, 0))
+
+(halfeye | dots) / (intervals | gradient) +
+  plot_layout(guides = "collect") &
+  expand_limits(x = c(-0.5, 2.0)) &
+  scale_fill_manual(values = c(Contrast = "#E69F00", Parameter = "#0072B2")) &
+  scale_color_manual(values = c(Contrast = "#E69F00", Parameter = "#0072B2")) &
+  theme(legend.position = "bottom",
+        plot.title.position = "plot") -> uncertainty
+
+ggsave("uncertainty.png", plot = uncertainty, device = ragg::agg_png,
+       path = here("2023-uncertainty"),
+       width = 8, height = 8, units = "in", dpi = 320,
+       bg = "white")
+```
+
+**Title:** Communicating Uncertainty Through Visualization
+\break
+
+**Submitters:**
+
+W. Jake Thompson, Ph.D.  
+Accessible Teaching, Learning, and Assessment Systems (ATLAS); University of Kansas
+\break
+
+**Corresponding author:**
+
+W. Jake Thompson, Ph.D.  
+ATLAS, University of Kansas  
+1122 West Campus Road  
+Joseph R. Pearson Hall, Room 437  
+Lawrence, KS 66045  
+wjakethompson@gmail.com  
+
+\newpage
+
+**Title:** Communicating Uncertainty Through Visualization
+\break
+
+**Caption:** Four different methods for visualizing uncertainty in parameter estimates.
+\break
+
+```{r print-fig, include = TRUE, echo = FALSE}
+#| out.width = "100%"
+
+knitr::include_graphics(here("2023-uncertainty", "uncertainty.png"))
+```
+
+**Description:**
+
+Accurately and effectively communicating uncertainty is a critical aspect scientific research.
+Often, results of scientific studies are reported as an average effect or model parameter with an associated standard error or confidence interval.
+However, this type of reporting often obscures important aspects of the data, and confidence intervals written in text are easy to skim over.
+Communicating uncertainty through visualization allows consumers of scientific research to see a more complete picture of the data or model, and can lead to more effective decision making (Padilla et al., 2023).
+This graphic uses simulated data to illustrate four different methods for visualizing the uncertainty in group-level effects and the difference between the effects.
+These uncertainty distributions are straightforward to create using the {ggplot2} and {ggdist} packages in R (Kay, 2022; Wickham et al., 2022).
+
+Half-eye plots use density plots with interval lines to visualize the complete distribution of plausible parameter values, while the interval lines allow readers to more easily summarize the high density areas.
+Dot plots (also called quantile dot plots) are similar to density plots, but summarize the distribution into a given number of dots or quantiles (100 in this graphic).
+This method of representing distributions as frequency counts has been shown to be easier for laypeople to understand (Kay et al., 2016).
+Interval plots summarizes ranges of plausible values (e.g., 67%, 89%, and 97% in this graphic).
+The wider intervals (i.e., more uncertainty) are shaded with a lighter color, where as the narrower intervals are darker.
+Finally, gradient plots are similar to interval plots, but rather than having sharp boundaries at arbitrary thresholds, the gradient plot is continuous.
+Transparency is used to "fade out" the low density regions, whereas the high density regions are opaque.
+\break
+
+**References**
+
+\hangindent=0.5in Kay, M. (2022). *ggdist: Visualizations of distributions and uncertainty*. R package version 3.2.0.https://mjskay.github.io/ggdist
+
+\hangindent=0.5in Kay, M., Kola, T., Hullman, J. R., & Munson, S. A. (2016, May 7--12). *When(ish) is my bus? User‑centered visualizations of uncertainty in everyday, mobile predictive systems* [Paper presentation]. CHI '16: CHI Conference on Human Factors in Computing Systems (pp. 5092--5103), San Jose, CA. https://doi.org/10.1145/2858036.2858558
+
+\hangindent=0.5in Padilla, L., Kay, M., & Hullman, J. (2023). Uncertainty visualization. In N. Balakrishnan, T. Colton, B. Everitt, W.Piegorsch, F. Ruggeri, & J. L. Teugels (Eds.), *Wiley StatsRef: Statistics reference online*. Wiley. https://doi.org/10.1002/9781118445112.stat08296
+
+\hangindent=0.5in Wickham, H., Chang, W., Henry, L., Pedersen, T. L., Takahashi, K., Wilke, C., Woo, K., Yutani, H., & Dunnington, D. (2022). *ggplot2: Create elegant data visualisations using the grammar of graphics*. R package version 3.4.0. https://ggplot2.tidyverse.org
